@@ -1,0 +1,3 @@
+# JitPack: JDK 17 for AGP 8 / Java 17 toolchain.
+jdk:
+  - openjdk17

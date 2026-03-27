@@ -1,0 +1,4 @@
+# Module build outputs and CMake
+/build
+.externalNativeBuild/
+.cxx/

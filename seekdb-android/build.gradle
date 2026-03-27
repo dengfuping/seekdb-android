@@ -1,0 +1,106 @@
+plugins {
+    id "com.android.library"
+    id "com.vanniktech.maven.publish"
+}
+
+android {
+    namespace "com.oceanbase.seekdb.android"
+    compileSdk 36
+    ndkVersion "28.2.13676358"
+
+    defaultConfig {
+        minSdk 21
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        consumerProguardFiles "consumer-rules.pro"
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17"
+            }
+        }
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+}
+
+group = findProperty("GROUP") ?: "com.oceanbase.seekdb"
+version = findProperty("VERSION_NAME") ?: "0.1.0-SNAPSHOT"
+
+mavenPublishing {
+    coordinates(
+            (findProperty("GROUP") ?: "com.oceanbase.seekdb") as String,
+            "seekdb-android",
+            (findProperty("VERSION_NAME") ?: "0.1.0-SNAPSHOT") as String)
+    pom {
+        name = findProperty("POM_NAME") ?: "seekdb-android"
+        description =
+                findProperty("POM_DESCRIPTION")
+                        ?: "SeekDB Android compatibility and native library"
+        def pomUrl = findProperty("POM_URL")
+        if (pomUrl != null) {
+            url = pomUrl
+        }
+        def licenceName = findProperty("POM_LICENCE_NAME")
+        def licenceUrl = findProperty("POM_LICENCE_URL")
+        if (licenceName != null && licenceUrl != null) {
+            licenses {
+                license {
+                    name = licenceName
+                    url = licenceUrl
+                    distribution = findProperty("POM_LICENCE_DIST") ?: "repo"
+                }
+            }
+        }
+        def devId = findProperty("POM_DEVELOPER_ID")
+        if (devId != null) {
+            developers {
+                developer {
+                    id = devId
+                    name = findProperty("POM_DEVELOPER_NAME")
+                    url = findProperty("POM_DEVELOPER_URL")
+                }
+            }
+        }
+        def scmUrl = findProperty("POM_SCM_URL")
+        if (scmUrl != null) {
+            scm {
+                url = scmUrl
+                connection = findProperty("POM_SCM_CONNECTION")
+                developerConnection = findProperty("POM_SCM_DEV_CONNECTION")
+            }
+        }
+    }
+    // Maven Central + signed publications (requires Sonatype credentials and signing keys).
+    publishToMavenCentral(/* automaticRelease */ true)
+    signAllPublications()
+}
+
+dependencies {
+    api("androidx.sqlite:sqlite:2.4.0")
+    implementation("androidx.annotation:annotation:1.9.1")
+
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.room:room-runtime:2.6.1")
+    androidTestAnnotationProcessor("androidx.room:room-compiler:2.6.1")
+}
