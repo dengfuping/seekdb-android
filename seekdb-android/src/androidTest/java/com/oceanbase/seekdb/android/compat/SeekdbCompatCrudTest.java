@@ -12,44 +12,50 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.oceanbase.seekdb.android.nativeapi.SeekdbClient;
-import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Assume;
-import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 public class SeekdbCompatCrudTest {
-    private SupportSQLiteOpenHelper helper;
-    private SupportSQLiteDatabase db;
+    private static SupportSQLiteOpenHelper helper;
+    private static SupportSQLiteDatabase db;
 
-    @Before
-    public void setUp() {
+    /**
+     * One native seekdb_open/close per class: repeated tearDown open+close cycles triggered
+     * intermittent hangs/crashes inside seekdb_open on some embed builds.
+     */
+    @BeforeClass
+    public static void setUpClass() {
         Assume.assumeTrue("Skip when libseekdb.so is unavailable", SeekdbClient.isNativeAvailable());
         Context context = ApplicationProvider.getApplicationContext();
-        SupportSQLiteOpenHelper.Configuration configuration =
-                SupportSQLiteOpenHelper.Configuration.builder(context)
-                        .name("seekdb_compat_crud.db")
-                        .callback(new SupportSQLiteOpenHelper.Callback(1) {
-                            @Override
-                            public void onCreate(SupportSQLiteDatabase db) {
-                                db.execSQL("CREATE TABLE IF NOT EXISTS t_user(id INTEGER PRIMARY KEY, name TEXT)");
-                            }
+        SupportSQLiteOpenHelper.Configuration configuration = SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name("seekdb_compat_crud.db")
+                .callback(new SupportSQLiteOpenHelper.Callback(1) {
+                    @Override
+                    public void onCreate(SupportSQLiteDatabase db) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS t_user(id INTEGER PRIMARY KEY, name TEXT)");
+                    }
 
-                            @Override
-                            public void onUpgrade(
-                                    SupportSQLiteDatabase db, int oldVersion, int newVersion) {}
-                        })
-                        .build();
+                    @Override
+                    public void onUpgrade(
+                            SupportSQLiteDatabase db, int oldVersion, int newVersion) {
+                    }
+                })
+                .build();
         helper = new SeekdbOpenHelperFactory().create(configuration);
         db = helper.getWritableDatabase();
     }
 
-    @After
-    public void tearDown() {
+    @AfterClass
+    public static void tearDownClass() {
         if (helper != null) {
             helper.close();
         }
+        helper = null;
+        db = null;
     }
 
     @Test
@@ -60,7 +66,7 @@ public class SeekdbCompatCrudTest {
         long id = db.insert("t_user", 0, values);
         assertTrue(id >= -1);
 
-        Cursor cursor = db.query(new SimpleSQLiteQuery("SELECT name FROM t_user WHERE id = ?", new Object[]{1}));
+        Cursor cursor = db.query(new SimpleSQLiteQuery("SELECT name FROM t_user WHERE id = ?", new Object[] { 1 }));
         try {
             assertTrue(cursor.moveToFirst());
             assertEquals("alice", cursor.getString(0));

@@ -194,10 +194,8 @@ public final class SeekdbWindowedCursor extends AbstractWindowedCursor {
             return;
         }
         nativeReleased = true;
-        if (resultPtr != 0L) {
-            SeekdbNativeBridge.nativeResultFree(resultPtr);
-            resultPtr = 0L;
-        }
+        // resultPtr refers to stmt's result_set; freed when the statement is closed.
+        resultPtr = 0L;
         if (stmtPtr != 0L) {
             SeekdbNativeBridge.nativeStmtClose(stmtPtr);
             stmtPtr = 0L;

@@ -27,7 +27,10 @@ public final class SeekdbClient {
         ensureNativeAvailable();
         long ptr = SeekdbNativeBridge.nativeConnect(database, autocommit);
         if (ptr == 0L) {
-            throw new IllegalStateException("seekdb_connect returned null connection");
+            throw new IllegalStateException(
+                    "seekdb_connect failed for database=" + database + " rc="
+                            + SeekdbNativeBridge.nativeLastErrorCode() + " "
+                            + SeekdbNativeBridge.nativeLastErrorMessage());
         }
         return new SeekdbConnection(ptr);
     }

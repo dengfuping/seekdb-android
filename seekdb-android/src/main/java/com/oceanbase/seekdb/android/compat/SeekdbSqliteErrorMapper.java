@@ -20,8 +20,15 @@ final class SeekdbSqliteErrorMapper {
     private SeekdbSqliteErrorMapper() {}
 
     static SQLiteException fromRc(int rc, String fallbackMessage) {
+        return fromRc(rc, fallbackMessage, 0L);
+    }
+
+    static SQLiteException fromRc(int rc, String fallbackMessage, long connectionPtr) {
         String message = safeNativeLastErrorMessage();
-        String sqlState = safeNativeLastSqlState();
+        String sqlState =
+                connectionPtr != 0L
+                        ? safeNativeLastSqlState(connectionPtr)
+                        : safeNativeLastSqlStateNoConnection();
         if (message == null || message.isEmpty()) {
             message = fallbackMessage;
         }
@@ -86,7 +93,7 @@ final class SeekdbSqliteErrorMapper {
         return new SeekdbError(
                 safeNativeLastErrorCode(),
                 safeNativeLastErrorMessage(),
-                safeNativeLastSqlState());
+                safeNativeLastSqlStateNoConnection());
     }
 
     private static int safeNativeLastErrorCode() {
@@ -105,9 +112,18 @@ final class SeekdbSqliteErrorMapper {
         }
     }
 
-    private static String safeNativeLastSqlState() {
+    private static String safeNativeLastSqlStateNoConnection() {
         try {
             String s = SeekdbNativeBridge.nativeLastSqlState();
+            return s == null || s.isEmpty() ? null : s;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String safeNativeLastSqlState(long connectionPtr) {
+        try {
+            String s = SeekdbNativeBridge.nativeLastSqlState(connectionPtr);
             return s == null || s.isEmpty() ? null : s;
         } catch (Throwable ignored) {
             return null;

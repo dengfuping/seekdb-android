@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.util.Pair;
+import java.lang.reflect.Field;
 import java.util.List;
 import org.junit.Test;
 
@@ -50,9 +51,11 @@ public class SeekdbCompatDatabaseContractTest {
     }
 
     @Test
-    public void nestedBegin_throwsIllegalState() {
+    public void nestedBegin_throwsIllegalState() throws Exception {
         SeekdbCompatDatabase db = new SeekdbCompatDatabase("unit.db");
-        db.beginTransaction();
+        Field depthField = SeekdbCompatDatabase.class.getDeclaredField("transactionDepth");
+        depthField.setAccessible(true);
+        depthField.setInt(db, 1);
         try {
             try {
                 db.beginTransaction();
@@ -63,7 +66,7 @@ public class SeekdbCompatDatabaseContractTest {
                         expected.getMessage());
             }
         } finally {
-            db.endTransaction();
+            depthField.setInt(db, 0);
         }
     }
 

@@ -3,6 +3,7 @@ package com.oceanbase.seekdb.android.compat;
 import android.annotation.SuppressLint;
 import android.content.ContentValues;
 import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.database.sqlite.SQLiteTransactionListener;
 import android.os.OperationCanceledException;
 import android.os.CancellationSignal;
@@ -18,29 +19,42 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
-    private static final String[] CONFLICT_VALUES = {
-            "",
-            " OR ROLLBACK ",
-            " OR ABORT ",
-            " OR FAIL ",
-            " OR IGNORE ",
-            " OR REPLACE "
-    };
+    /**
+     * Android SQLite uses {@code INSERT OR IGNORE INTO ...} / {@code UPDATE OR IGNORE ...}.
+     * OceanBase/MySQL expects {@code INSERT IGNORE INTO ...} / {@code UPDATE IGNORE ...}; plain
+     * {@code INSERT}/{@code UPDATE} must be separated from the table name (never concatenate into
+     * {@code INSERTINTO} / {@code UPDATEt}).
+     */
     private final String path;
     private boolean open = true;
-    private boolean transactionOpen;
+    /** Nested levels (Room invalidation may begin/end before the app's transaction). */
+    private int transactionDepth;
+
     private boolean transactionSuccessful;
     private int version = 0;
     private long pageSize = 4096L;
     private boolean writeAheadLoggingEnabled;
     private SeekdbConnection connection;
+    private SeekdbOpenHelper hostHelper;
     private final SeekdbSessionManager sessionManager = new SeekdbSessionManager();
     private SQLiteTransactionListener activeTransactionListener;
 
     SeekdbCompatDatabase(String path) {
         this.path = path;
+    }
+
+    void attachHost(SeekdbOpenHelper helper) {
+        this.hostHelper = helper;
+    }
+
+    private void awaitHostReadyIfNeeded() {
+        if (hostHelper != null) {
+            hostHelper.awaitReadyForExternalUse();
+        }
     }
 
     void setConnection(SeekdbConnection connection) {
@@ -57,21 +71,25 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         if (active == null || active.isClosed()) {
             throw new android.database.sqlite.SQLiteException("Database connection is not ready");
         }
-        return new SeekdbCompatStatement(active.pointer(), sql);
+        return new SeekdbCompatStatement(
+                active.pointer(), SeekdbCompatSql.normalize(sql), active.nativeMutex());
     }
 
     @Override
     public void beginTransaction() {
-        if (transactionOpen) {
+        if (transactionDepth > 0) {
             throw new IllegalStateException(
                     "Nested transactions are not supported; finish the current transaction first.");
         }
         SeekdbConnection active = activeConnection();
-        if (active != null && !active.isClosed()) {
-            SeekdbSqliteErrorMapper.throwIfError(active.begin(), "beginTransaction failed");
+        if (active == null || active.isClosed()) {
+            throw new android.database.sqlite.SQLiteException("Database connection is not ready");
         }
-        transactionOpen = true;
-        transactionSuccessful = false;
+        synchronized (active.nativeMutex()) {
+            SeekdbSqliteErrorMapper.throwIfError(active.begin(), "beginTransaction failed");
+            transactionDepth++;
+            transactionSuccessful = false;
+        }
     }
 
     @Override
@@ -95,39 +113,48 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
 
     @Override
     public void endTransaction() {
-        if (!transactionOpen) {
-            throw new IllegalStateException("endTransaction called but no transaction is active");
-        }
         SQLiteTransactionListener listener = activeTransactionListener;
         activeTransactionListener = null;
+        if (transactionDepth <= 0) {
+            if (listener != null) {
+                listener.onRollback();
+            }
+            throw new IllegalStateException("endTransaction called but no transaction is active");
+        }
         SeekdbConnection active = activeConnection();
-        try {
-            if (active == null || active.isClosed()) {
-                if (listener != null) {
-                    listener.onRollback();
-                }
+        if (active == null || active.isClosed()) {
+            if (listener != null) {
+                listener.onRollback();
+            }
+            return;
+        }
+        synchronized (active.nativeMutex()) {
+            transactionDepth--;
+            if (transactionDepth > 0) {
+                transactionSuccessful = false;
                 return;
             }
-            if (transactionSuccessful) {
-                SeekdbSqliteErrorMapper.throwIfError(active.commit(), "commit failed");
-                if (listener != null) {
-                    listener.onCommit();
+            try {
+                if (transactionSuccessful) {
+                    SeekdbSqliteErrorMapper.throwIfError(active.commit(), "commit failed");
+                    if (listener != null) {
+                        listener.onCommit();
+                    }
+                } else {
+                    SeekdbSqliteErrorMapper.throwIfError(active.rollback(), "rollback failed");
+                    if (listener != null) {
+                        listener.onRollback();
+                    }
                 }
-            } else {
-                SeekdbSqliteErrorMapper.throwIfError(active.rollback(), "rollback failed");
-                if (listener != null) {
-                    listener.onRollback();
-                }
+            } finally {
+                transactionSuccessful = false;
             }
-        } finally {
-            transactionOpen = false;
-            transactionSuccessful = false;
         }
     }
 
     @Override
     public void setTransactionSuccessful() {
-        if (!transactionOpen) {
+        if (transactionDepth <= 0) {
             throw new IllegalStateException("setTransactionSuccessful called but no transaction is active");
         }
         transactionSuccessful = true;
@@ -135,12 +162,13 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
 
     @Override
     public boolean inTransaction() {
-        return transactionOpen;
+        return transactionDepth > 0;
     }
 
     @Override
     public boolean isDbLockedByCurrentThread() {
-        // Degraded: no file lock introspection; in-transaction work is serialized on this API surface.
+        // Degraded: no file lock introspection; in-transaction work is serialized on
+        // this API surface.
         return inTransaction();
     }
 
@@ -203,17 +231,19 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
 
     @Override
     public Cursor query(String query, Object[] bindArgs) {
-        SeekdbCompatStatement statement = (SeekdbCompatStatement) compileStatement(query);
-        try {
-            bindArgs(statement, bindArgs);
-            return statement.executeQueryCursor();
-        } finally {
-            statement.close();
-        }
+        return queryInternal(query, bindArgs);
     }
 
     @Override
     public Cursor query(SupportSQLiteQuery query) {
+        Cursor routed = maybeRoutePragmaQuery(query.getSql());
+        if (routed != null) {
+            return routed;
+        }
+        routed = maybeRouteRoomSqliteMasterQuery(query.getSql());
+        if (routed != null) {
+            return routed;
+        }
         SeekdbCompatStatement statement = (SeekdbCompatStatement) compileStatement(query.getSql());
         try {
             query.bindTo(statement);
@@ -226,6 +256,14 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
     @Override
     public Cursor query(SupportSQLiteQuery query, CancellationSignal cancellationSignal) {
         throwIfCanceled(cancellationSignal);
+        Cursor routed = maybeRoutePragmaQuery(query.getSql());
+        if (routed != null) {
+            return routed;
+        }
+        routed = maybeRouteRoomSqliteMasterQuery(query.getSql());
+        if (routed != null) {
+            return routed;
+        }
         SeekdbCompatStatement statement = (SeekdbCompatStatement) compileStatement(query.getSql());
         try {
             query.bindTo(statement);
@@ -241,11 +279,18 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         if (values == null || values.size() == 0) {
             throw new IllegalArgumentException("Empty values for insert");
         }
-        String conflict = conflictAlgorithm >= 0 && conflictAlgorithm < CONFLICT_VALUES.length
-                ? CONFLICT_VALUES[conflictAlgorithm]
-                : "";
         StringBuilder sql = new StringBuilder();
-        sql.append("INSERT").append(conflict).append("INTO ").append(table).append(" (");
+        if (conflictAlgorithm == 5) {
+            // MySQL/OceanBase: REPLACE INTO … (SQLite: INSERT OR REPLACE INTO …)
+            sql.append("REPLACE INTO ");
+        } else if (conflictAlgorithm == 4) {
+            // MySQL/OceanBase: INSERT IGNORE INTO … (SQLite: INSERT OR IGNORE INTO …)
+            sql.append("INSERT IGNORE INTO ");
+        } else {
+            // CONFLICT_NONE and SQLite OR ROLLBACK/ABORT/FAIL: plain INSERT INTO
+            sql.append("INSERT INTO ");
+        }
+        sql.append(table).append(" (");
         StringBuilder placeholders = new StringBuilder();
         Object[] bindArgs = new Object[values.size()];
         int i = 0;
@@ -290,11 +335,14 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         if (values == null || values.size() == 0) {
             throw new IllegalArgumentException("Empty values for update");
         }
-        String conflict = conflictAlgorithm >= 0 && conflictAlgorithm < CONFLICT_VALUES.length
-                ? CONFLICT_VALUES[conflictAlgorithm]
-                : "";
         StringBuilder sql = new StringBuilder();
-        sql.append("UPDATE").append(conflict).append(table).append(" SET ");
+        if (conflictAlgorithm == 4) {
+            // MySQL/OceanBase: UPDATE IGNORE tbl … (SQLite: UPDATE OR IGNORE tbl …)
+            sql.append("UPDATE IGNORE ");
+        } else {
+            sql.append("UPDATE ");
+        }
+        sql.append(table).append(" SET ");
         Object[] bindArgs = new Object[values.size() + (whereArgs == null ? 0 : whereArgs.length)];
         int i = 0;
         for (Map.Entry<String, Object> entry : values.valueSet()) {
@@ -323,6 +371,12 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
 
     @Override
     public void execSQL(String sql) {
+        if (isIgnoredSqlitePragmaExec(sql)) {
+            return;
+        }
+        if (isRoomInvalidationTriggerSkipped(SeekdbCompatSql.normalize(sql))) {
+            return;
+        }
         SupportSQLiteStatement statement = compileStatement(sql);
         try {
             statement.execute();
@@ -333,6 +387,12 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
 
     @Override
     public void execSQL(String sql, Object[] bindArgs) {
+        if (isIgnoredSqlitePragmaExec(sql)) {
+            return;
+        }
+        if (isRoomInvalidationTriggerSkipped(SeekdbCompatSql.normalize(sql))) {
+            return;
+        }
         SupportSQLiteStatement statement = compileStatement(sql);
         try {
             bindArgs(statement, bindArgs);
@@ -340,6 +400,34 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         } finally {
             closeStatement(statement);
         }
+    }
+
+    /** SQLite PRAGMAs Room may run at open; the embedded MySQL/OceanBase parser does not support them. */
+    private static boolean isIgnoredSqlitePragmaExec(String sql) {
+        if (sql == null) {
+            return false;
+        }
+        String u = sql.trim().toUpperCase(Locale.ROOT);
+        return u.startsWith("PRAGMA TEMP_STORE")
+                || u.startsWith("PRAGMA PAGE_SIZE")
+                || u.startsWith("PRAGMA SYNCHRONOUS")
+                || u.startsWith("PRAGMA JOURNAL_MODE")
+                || u.startsWith("PRAGMA CACHE_SIZE")
+                || u.startsWith("PRAGMA FOREIGN_KEYS")
+                || u.startsWith("PRAGMA RECURSIVE_TRIGGERS");
+    }
+
+    /**
+     * Room invalidation triggers UPDATE {@code room_table_modification_log}; the embed engine
+     * currently crashes on this trigger path (SIGSEGV). Skipping preserves CRUD; table-change
+     * observation via Room invalidation is degraded.
+     */
+    private static boolean isRoomInvalidationTriggerSkipped(String sql) {
+        if (sql == null) {
+            return false;
+        }
+        String u = sql.trim().toUpperCase(Locale.ROOT);
+        return u.startsWith("CREATE TRIGGER") && u.contains("ROOM_TABLE_MODIFICATION_LOG");
     }
 
     @Override
@@ -417,7 +505,58 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         open = false;
     }
 
-    private Cursor queryInternal(String sql, Object[] bindArgs) {
+    private static final Pattern PRAGMA_TABLE_INFO =
+            Pattern.compile("(?is)^\\s*PRAGMA\\s+table_info\\s*\\(\\s*[`']?([^)`']+)[`']?\\s*\\)\\s*$");
+    private static final Pattern PRAGMA_FOREIGN_KEY_LIST =
+            Pattern.compile("(?is)^\\s*PRAGMA\\s+foreign_key_list\\s*\\(\\s*[`']?([^)`']+)[`']?\\s*\\)\\s*$");
+
+    /**
+     * Room uses SQLite {@code PRAGMA} introspection; map or stub the ones it needs on MySQL/OceanBase.
+     */
+    private Cursor maybeRoutePragmaQuery(String sql) {
+        if (sql == null) {
+            return null;
+        }
+        String trimmed = sql.trim();
+        String upper = trimmed.toUpperCase(Locale.ROOT);
+        if (!upper.startsWith("PRAGMA")) {
+            return null;
+        }
+        Matcher ti = PRAGMA_TABLE_INFO.matcher(trimmed);
+        if (ti.matches()) {
+            return cursorPragmaTableInfo(ti.group(1));
+        }
+        Matcher fk = PRAGMA_FOREIGN_KEY_LIST.matcher(trimmed);
+        if (fk.matches()) {
+            return cursorPragmaForeignKeyListEmpty();
+        }
+        if (upper.startsWith("PRAGMA INDEX_LIST")) {
+            return new MatrixCursor(new String[0]);
+        }
+        if (upper.startsWith("PRAGMA INDEX_XINFO")) {
+            return new MatrixCursor(new String[0]);
+        }
+        return null;
+    }
+
+    private Cursor cursorPragmaTableInfo(String rawTableName) {
+        String table = rawTableName == null ? "" : rawTableName.trim();
+        String sub =
+                "SELECT (ORDINAL_POSITION - 1) AS cid, COLUMN_NAME AS name, COLUMN_TYPE AS type, "
+                        + "IF(IS_NULLABLE = 'NO', 1, 0) AS notnull, COLUMN_DEFAULT AS dflt_value, "
+                        + "IF(COLUMN_KEY = 'PRI', 1, 0) AS pk "
+                        + "FROM information_schema.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? "
+                        + "ORDER BY ORDINAL_POSITION";
+        return queryDirect(sub, new Object[] {table});
+    }
+
+    private static Cursor cursorPragmaForeignKeyListEmpty() {
+        return new MatrixCursor(
+                new String[] {"id", "seq", "table", "on_delete", "on_update", "from", "to"});
+    }
+
+    private Cursor queryDirect(String sql, Object[] bindArgs) {
         SeekdbConnection active = activeConnection();
         if (active == null || active.isClosed()) {
             throw new android.database.sqlite.SQLiteException("Database connection is not ready");
@@ -431,7 +570,80 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         }
     }
 
+    /**
+     * Room's {@code RoomOpenHelper} queries {@code sqlite_master}, which does not exist on
+     * MySQL/OceanBase. Map the two catalog probes it uses to {@code information_schema.tables}.
+     */
+    private Cursor maybeRouteRoomSqliteMasterQuery(String sql) {
+        if (sql == null) {
+            return null;
+        }
+        String upper = sql.trim().toUpperCase(Locale.ROOT);
+        if (!upper.contains("SQLITE_MASTER")) {
+            return null;
+        }
+        if (upper.contains("SELECT 1 FROM SQLITE_MASTER")
+                && upper.contains("TYPE")
+                && upper.contains("TABLE")
+                && upper.contains("ROOM_MASTER_TABLE")) {
+            return cursorRoomHasRoomMasterTable();
+        }
+        if (upper.contains("SELECT COUNT(*) FROM SQLITE_MASTER")
+                && upper.contains("ANDROID_METADATA")) {
+            return cursorRoomSqliteMasterNonAndroidMetadataCount();
+        }
+        return null;
+    }
+
+    private Cursor cursorRoomHasRoomMasterTable() {
+        SeekdbCompatStatement st =
+                (SeekdbCompatStatement)
+                        compileStatement(
+                                "SELECT COUNT(*) FROM information_schema.tables WHERE "
+                                        + "TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'room_master_table'");
+        try {
+            long n = st.simpleQueryForLong();
+            MatrixCursor c = new MatrixCursor(new String[] {"1"});
+            if (n > 0L) {
+                c.addRow(new Object[] {1});
+            }
+            return c;
+        } finally {
+            st.close();
+        }
+    }
+
+    private Cursor cursorRoomSqliteMasterNonAndroidMetadataCount() {
+        SeekdbCompatStatement st =
+                (SeekdbCompatStatement)
+                        compileStatement(
+                                "SELECT COUNT(*) FROM information_schema.tables WHERE "
+                                        + "TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' "
+                                        + "AND TABLE_NAME <> 'android_metadata'");
+        try {
+            long n = st.simpleQueryForLong();
+            MatrixCursor c = new MatrixCursor(new String[] {"count(*)"});
+            c.addRow(new Object[] {n});
+            return c;
+        } finally {
+            st.close();
+        }
+    }
+
+    private Cursor queryInternal(String sql, Object[] bindArgs) {
+        Cursor routed = maybeRoutePragmaQuery(sql);
+        if (routed != null) {
+            return routed;
+        }
+        routed = maybeRouteRoomSqliteMasterQuery(sql);
+        if (routed != null) {
+            return routed;
+        }
+        return queryDirect(sql, bindArgs);
+    }
+
     private SeekdbConnection activeConnection() {
+        awaitHostReadyIfNeeded();
         return sessionManager.currentConnection();
     }
 

@@ -7,7 +7,8 @@ public final class SeekdbNativeBridge {
         System.loadLibrary("seekdb_android_jni");
     }
 
-    private SeekdbNativeBridge() {}
+    private SeekdbNativeBridge() {
+    }
 
     public static native int nativeAbiVersion();
 
@@ -41,10 +42,15 @@ public final class SeekdbNativeBridge {
 
     public static native void nativeStmtClose(long stmtPtr);
 
-    /** Optional; returns -1 if {@code seekdb_stmt_reset} is not exported by {@code libseekdb.so}. */
+    /**
+     * Optional; returns -1 if {@code seekdb_stmt_reset} is not exported by
+     * {@code libseekdb.so}.
+     */
     public static native int nativeStmtReset(long stmtPtr);
 
-    /** Optional; returns -1 if {@code seekdb_stmt_clear_bindings} is not exported. */
+    /**
+     * Optional; returns -1 if {@code seekdb_stmt_clear_bindings} is not exported.
+     */
     public static native int nativeStmtClearBindings(long stmtPtr);
 
     public static native int nativeStmtBindNull(long stmtPtr, int index0Based);
@@ -59,15 +65,31 @@ public final class SeekdbNativeBridge {
 
     public static native long nativeStmtExecute(long stmtPtr);
 
+    /** Last {@code seekdb_stmt_execute} (or bind_param) return code for this statement; 0 if success. */
+    public static native int nativeStmtLastExecuteRc(long stmtPtr);
+
     public static native long nativeStmtAffectedRows(long stmtPtr);
 
     public static native long nativeStmtInsertId(long stmtPtr);
 
     public static native int nativeLastErrorCode();
 
+    /**
+     * Connection-scoped engine errno from {@code seekdb_errno(SeekdbHandle)} when exported by
+     * {@code libseekdb.so}; otherwise 0. Values are cast to signed 32-bit (e.g. OB errors).
+     */
+    public static native int nativeErrno(long connectionPtr);
+
     public static native String nativeLastErrorMessage();
 
+    /**
+     * Thread-local SQLSTATE is not available without a connection; prefer
+     * {@link #nativeLastSqlState(long)}.
+     */
     public static native String nativeLastSqlState();
+
+    /** SQLSTATE from {@code seekdb_sqlstate(SeekdbHandle)} (official C ABI). */
+    public static native String nativeLastSqlState(long connectionPtr);
 
     public static native int nativeResultColumnTypeId(long resultPtr, int columnIndex);
 
@@ -76,8 +98,10 @@ public final class SeekdbNativeBridge {
     public static native Object[][] nativeResultFetchAllTyped(long resultPtr, CancellationSignal cancellationSignal);
 
     /**
-     * Advances the result cursor and returns one row as typed {@link Object} cells. Returns a
-     * zero-length array at end-of-data (SEEKDB_NO_DATA / rc 100). Returns {@code null} on native error;
+     * Advances the result cursor and returns one row as typed {@link Object} cells.
+     * Returns a
+     * zero-length array at end-of-data (SEEKDB_NO_DATA / rc 100). Returns
+     * {@code null} on native error;
      * callers should check {@link #nativeLastErrorCode()}.
      */
     public static native Object[] nativeResultReadNextRowTyped(long resultPtr);

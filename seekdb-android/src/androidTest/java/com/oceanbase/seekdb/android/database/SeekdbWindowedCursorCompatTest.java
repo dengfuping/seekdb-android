@@ -27,6 +27,7 @@ public class SeekdbWindowedCursorCompatTest {
     @Before
     public void assumeNative() {
         Assume.assumeTrue("Skip when libseekdb.so is unavailable", SeekdbClient.isNativeAvailable());
+        SeekdbSQLite.setStreamingQueryCursorsEnabled(true);
     }
 
     @After
@@ -36,7 +37,9 @@ public class SeekdbWindowedCursorCompatTest {
 
     @Test
     public void windowedQuery_hasWindow_randomAccessWithinBufferedRange() {
-        SeekdbSQLite.setStreamingQueryCursorsEnabled(true);
+        org.junit.Assert.assertTrue(
+                "streaming must be on for this test",
+                SeekdbSQLite.isStreamingQueryCursorsEnabled());
         Context context = ApplicationProvider.getApplicationContext();
         SupportSQLiteOpenHelper.Configuration configuration =
                 SupportSQLiteOpenHelper.Configuration.builder(context)
@@ -70,16 +73,20 @@ public class SeekdbWindowedCursorCompatTest {
                             new SimpleSQLiteQuery(
                                     "SELECT v FROM t_n ORDER BY id", new Object[] {}));
             try {
-                assertTrue(c instanceof SeekdbWindowedCursor);
+                assertTrue(
+                        "expected SeekdbWindowedCursor, got " + c.getClass().getName(),
+                        c instanceof SeekdbWindowedCursor);
                 SeekdbWindowedCursor wc = (SeekdbWindowedCursor) c;
-                assertTrue(wc.hasWindow());
+                // AbstractWindowedCursor allocates mWindow on first onMove; hasWindow() is false until then.
+                assertTrue("moveToFirst", c.moveToFirst());
+                assertTrue("hasWindow after first fill", wc.hasWindow());
 
-                assertTrue(c.moveToLast());
+                assertTrue("moveToLast", c.moveToLast());
                 assertEquals("r5", c.getString(0));
-                assertTrue(c.moveToFirst());
+                assertTrue("moveToFirst", c.moveToFirst());
                 assertEquals("r1", c.getString(0));
-                assertEquals(5, c.getCount());
-                assertTrue(c.moveToPosition(2));
+                assertEquals("row count", 5, c.getCount());
+                assertTrue("moveToPosition(2)", c.moveToPosition(2));
                 assertEquals("r3", c.getString(0));
             } finally {
                 c.close();

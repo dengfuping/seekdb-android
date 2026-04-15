@@ -9,7 +9,8 @@ android {
     ndkVersion "28.2.13676358"
 
     defaultConfig {
-        minSdk 21
+        // API 35+ blocks installing packages with minSdk < 24 (INSTALL_FAILED_DEPRECATED_SDK_VERSION).
+        minSdk 24
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
         externalNativeBuild {

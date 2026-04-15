@@ -8,3 +8,6 @@
 .DS_Store
 /build
 /captures
+
+# Prebuilt JNI libs (build or copy locally; do not commit binaries)
+seekdb-android/src/main/jniLibs/**/*.so
