@@ -103,5 +103,8 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.room:room-runtime:2.6.1")
+    // Classpath scanning loads Room optional types; LiveData + room-paging complete the Room graph.
+    androidTestImplementation("androidx.lifecycle:lifecycle-livedata:2.8.7")
+    androidTestImplementation("androidx.room:room-paging:2.6.1")
     androidTestAnnotationProcessor("androidx.room:room-compiler:2.6.1")
 }

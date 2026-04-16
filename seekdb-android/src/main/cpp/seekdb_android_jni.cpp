@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <dlfcn.h>
+#include <android/log.h>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -277,6 +278,11 @@ void ensure_api_loaded() {
     a.initialized = true;
     a.lib_handle = dlopen("libseekdb.so", RTLD_NOW | RTLD_LOCAL);
     if (a.lib_handle == nullptr) {
+        __android_log_print(
+                ANDROID_LOG_ERROR,
+                "SeekdbJni",
+                "dlopen libseekdb.so failed: %s",
+                dlerror());
         return;
     }
     bool ok = true;

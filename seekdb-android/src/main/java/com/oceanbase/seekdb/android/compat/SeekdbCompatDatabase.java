@@ -77,16 +77,14 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
 
     @Override
     public void beginTransaction() {
-        if (transactionDepth > 0) {
-            throw new IllegalStateException(
-                    "Nested transactions are not supported; finish the current transaction first.");
-        }
         SeekdbConnection active = activeConnection();
         if (active == null || active.isClosed()) {
             throw new android.database.sqlite.SQLiteException("Database connection is not ready");
         }
         synchronized (active.nativeMutex()) {
-            SeekdbSqliteErrorMapper.throwIfError(active.begin(), "beginTransaction failed");
+            if (transactionDepth == 0) {
+                SeekdbSqliteErrorMapper.throwIfError(active.begin(), "beginTransaction failed");
+            }
             transactionDepth++;
             transactionSuccessful = false;
         }

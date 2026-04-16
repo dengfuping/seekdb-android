@@ -6,7 +6,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.util.Pair;
-import java.lang.reflect.Field;
 import java.util.List;
 import org.junit.Test;
 
@@ -48,26 +47,6 @@ public class SeekdbCompatDatabaseContractTest {
     public void setMaximumSize_throwsUnsupported() {
         SeekdbCompatDatabase db = new SeekdbCompatDatabase("unit.db");
         db.setMaximumSize(1024L);
-    }
-
-    @Test
-    public void nestedBegin_throwsIllegalState() throws Exception {
-        SeekdbCompatDatabase db = new SeekdbCompatDatabase("unit.db");
-        Field depthField = SeekdbCompatDatabase.class.getDeclaredField("transactionDepth");
-        depthField.setAccessible(true);
-        depthField.setInt(db, 1);
-        try {
-            try {
-                db.beginTransaction();
-                throw new AssertionError("expected IllegalStateException");
-            } catch (IllegalStateException expected) {
-                assertEquals(
-                        "Nested transactions are not supported; finish the current transaction first.",
-                        expected.getMessage());
-            }
-        } finally {
-            depthField.setInt(db, 0);
-        }
     }
 
     @Test

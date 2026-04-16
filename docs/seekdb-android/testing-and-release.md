@@ -89,3 +89,11 @@ Native requirement:
 
 - `libseekdb.so` must be available for full integration tests.
 - Tests with native availability assumptions will be skipped when native library is absent.
+
+Stale device state:
+
+- If instrumentation fails after engine or schema changes (e.g. migration **downgrade** errors), clear the test package: `adb shell pm clear com.oceanbase.seekdb.android.test`, reinstall if needed, then rerun. See **`docs/seekdb-android/seekdb-engine-android.md`** for the full note.
+
+Engine alignment:
+
+- Android-specific behavior in the **seekdb** repository (RS reporting, DDL logging, signal/CPU startup, stmt write path) is summarized in **`docs/seekdb-android/seekdb-engine-android.md`** for reviewers and release notes.
