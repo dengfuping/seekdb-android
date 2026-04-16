@@ -204,6 +204,9 @@ struct SeekdbDynamicApi {
     my_ulonglong (*seekdb_stmt_affected_rows)(SeekdbStmt) = nullptr;
     my_ulonglong (*seekdb_stmt_insert_id)(SeekdbStmt) = nullptr;
     int (*seekdb_stmt_reset)(SeekdbStmt) = nullptr;
+    unsigned int (*seekdb_stmt_errno_fn)(SeekdbStmt) = nullptr;
+    const char* (*seekdb_stmt_error_fn)(SeekdbStmt) = nullptr;
+    const char* (*seekdb_stmt_sqlstate_fn)(SeekdbStmt) = nullptr;
 
     void* lib_handle = nullptr;
     bool initialized = false;
@@ -324,6 +327,9 @@ void ensure_api_loaded() {
         load_symbol(a.lib_handle, "seekdb_errno", &a.seekdb_errno_fn);
         load_symbol(a.lib_handle, "seekdb_sqlstate", &a.seekdb_sqlstate_fn);
         load_symbol(a.lib_handle, "seekdb_stmt_reset", &a.seekdb_stmt_reset);
+        load_symbol(a.lib_handle, "seekdb_stmt_errno", &a.seekdb_stmt_errno_fn);
+        load_symbol(a.lib_handle, "seekdb_stmt_error", &a.seekdb_stmt_error_fn);
+        load_symbol(a.lib_handle, "seekdb_stmt_sqlstate", &a.seekdb_stmt_sqlstate_fn);
     }
 }
 

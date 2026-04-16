@@ -3,8 +3,10 @@ package com.oceanbase.seekdb.android.compat;
 import com.oceanbase.seekdb.android.nativeapi.SeekdbClient;
 
 /**
- * Placeholder entry for the SQLite compatibility layer.
- * Full SupportSQLite implementation is planned in next iteration.
+ * Entry point for the SQLite compatibility layer (AndroidX {@code SupportSQLite} / Room). Room
+ * {@code InvalidationTracker} uses {@code CREATE TEMP TRIGGER} on {@code room_table_modification_log}
+ * like sqlite-android; trigger DDL is executed on the embed engine (see {@link SeekdbCompatSql}
+ * rewrites).
  */
 public final class SeekdbCompat {
     public static final String VERSION = "0.1.0-dev";

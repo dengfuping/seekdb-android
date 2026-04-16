@@ -22,8 +22,8 @@
 - Transaction begin/success/end: MustCompatible
   - Contract: success flag controls commit vs rollback behavior.
   - `SQLiteTransactionListener`: `onBegin` at start; `onCommit` after successful commit; `onRollback` after rollback path or when no usable connection.
-- Nested transaction exact parity: DegradedCompatible
-  - Contract: a second `beginTransaction` while a transaction is open throws `IllegalStateException` (no nested savepoints).
+- Nested `beginTransaction` / `endTransaction` (depth refcount): MustCompatible
+  - Contract: only the **outermost** `endTransaction` maps to native commit/rollback; inner pairs increment/decrement depth without a second native `BEGIN` (Room / `InvalidationTracker` can nest around app transactions). Not SQLite savepoints.
 - Busy/lock timing parity: DegradedCompatible
   - Contract: expose stable error behavior, timing details may differ.
 - `isDbLockedByCurrentThread`: DegradedCompatible

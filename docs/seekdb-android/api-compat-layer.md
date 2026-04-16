@@ -28,6 +28,8 @@ The layer must satisfy Room's expected database backend semantics through a Supp
 - Transaction begin/success/end patterns.
 - Predictable error propagation.
 
+Concrete seekdb-android behaviors (SQL rewrites, `PRAGMA` / `sqlite_master` routing, nested transaction depth, invalidation DDL) are summarized in [`room-sqlite-compat.md`](room-sqlite-compat.md).
+
 ## 4. Internal Mapping Rules
 
 ### 4.1 Connection

@@ -24,14 +24,19 @@ import java.util.regex.Pattern;
 
 final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
     /**
-     * Android SQLite uses {@code INSERT OR IGNORE INTO ...} / {@code UPDATE OR IGNORE ...}.
-     * OceanBase/MySQL expects {@code INSERT IGNORE INTO ...} / {@code UPDATE IGNORE ...}; plain
-     * {@code INSERT}/{@code UPDATE} must be separated from the table name (never concatenate into
+     * Android SQLite uses {@code INSERT OR IGNORE INTO ...} /
+     * {@code UPDATE OR IGNORE ...}.
+     * OceanBase/MySQL expects {@code INSERT IGNORE INTO ...} /
+     * {@code UPDATE IGNORE ...}; plain
+     * {@code INSERT}/{@code UPDATE} must be separated from the table name (never
+     * concatenate into
      * {@code INSERTINTO} / {@code UPDATEt}).
      */
     private final String path;
     private boolean open = true;
-    /** Nested levels (Room invalidation may begin/end before the app's transaction). */
+    /**
+     * Nested levels (Room invalidation may begin/end before the app's transaction).
+     */
     private int transactionDepth;
 
     private boolean transactionSuccessful;
@@ -372,9 +377,6 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         if (isIgnoredSqlitePragmaExec(sql)) {
             return;
         }
-        if (isRoomInvalidationTriggerSkipped(SeekdbCompatSql.normalize(sql))) {
-            return;
-        }
         SupportSQLiteStatement statement = compileStatement(sql);
         try {
             statement.execute();
@@ -388,9 +390,6 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         if (isIgnoredSqlitePragmaExec(sql)) {
             return;
         }
-        if (isRoomInvalidationTriggerSkipped(SeekdbCompatSql.normalize(sql))) {
-            return;
-        }
         SupportSQLiteStatement statement = compileStatement(sql);
         try {
             bindArgs(statement, bindArgs);
@@ -400,7 +399,10 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         }
     }
 
-    /** SQLite PRAGMAs Room may run at open; the embedded MySQL/OceanBase parser does not support them. */
+    /**
+     * SQLite PRAGMAs Room may run at open; the embedded MySQL/OceanBase parser does
+     * not support them.
+     */
     private static boolean isIgnoredSqlitePragmaExec(String sql) {
         if (sql == null) {
             return false;
@@ -413,19 +415,6 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
                 || u.startsWith("PRAGMA CACHE_SIZE")
                 || u.startsWith("PRAGMA FOREIGN_KEYS")
                 || u.startsWith("PRAGMA RECURSIVE_TRIGGERS");
-    }
-
-    /**
-     * Room invalidation triggers UPDATE {@code room_table_modification_log}; the embed engine
-     * currently crashes on this trigger path (SIGSEGV). Skipping preserves CRUD; table-change
-     * observation via Room invalidation is degraded.
-     */
-    private static boolean isRoomInvalidationTriggerSkipped(String sql) {
-        if (sql == null) {
-            return false;
-        }
-        String u = sql.trim().toUpperCase(Locale.ROOT);
-        return u.startsWith("CREATE TRIGGER") && u.contains("ROOM_TABLE_MODIFICATION_LOG");
     }
 
     @Override
@@ -503,13 +492,14 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
         open = false;
     }
 
-    private static final Pattern PRAGMA_TABLE_INFO =
-            Pattern.compile("(?is)^\\s*PRAGMA\\s+table_info\\s*\\(\\s*[`']?([^)`']+)[`']?\\s*\\)\\s*$");
-    private static final Pattern PRAGMA_FOREIGN_KEY_LIST =
-            Pattern.compile("(?is)^\\s*PRAGMA\\s+foreign_key_list\\s*\\(\\s*[`']?([^)`']+)[`']?\\s*\\)\\s*$");
+    private static final Pattern PRAGMA_TABLE_INFO = Pattern
+            .compile("(?is)^\\s*PRAGMA\\s+table_info\\s*\\(\\s*[`']?([^)`']+)[`']?\\s*\\)\\s*$");
+    private static final Pattern PRAGMA_FOREIGN_KEY_LIST = Pattern
+            .compile("(?is)^\\s*PRAGMA\\s+foreign_key_list\\s*\\(\\s*[`']?([^)`']+)[`']?\\s*\\)\\s*$");
 
     /**
-     * Room uses SQLite {@code PRAGMA} introspection; map or stub the ones it needs on MySQL/OceanBase.
+     * Room uses SQLite {@code PRAGMA} introspection; map or stub the ones it needs
+     * on MySQL/OceanBase.
      */
     private Cursor maybeRoutePragmaQuery(String sql) {
         if (sql == null) {
@@ -539,19 +529,26 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
 
     private Cursor cursorPragmaTableInfo(String rawTableName) {
         String table = rawTableName == null ? "" : rawTableName.trim();
-        String sub =
-                "SELECT (ORDINAL_POSITION - 1) AS cid, COLUMN_NAME AS name, COLUMN_TYPE AS type, "
-                        + "IF(IS_NULLABLE = 'NO', 1, 0) AS notnull, COLUMN_DEFAULT AS dflt_value, "
-                        + "IF(COLUMN_KEY = 'PRI', 1, 0) AS pk "
-                        + "FROM information_schema.COLUMNS "
-                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? "
-                        + "ORDER BY ORDINAL_POSITION";
-        return queryDirect(sub, new Object[] {table});
+        String sub = "SELECT (ORDINAL_POSITION - 1) AS cid, COLUMN_NAME AS name, "
+                + "CASE "
+                + "WHEN UPPER(COLUMN_TYPE) LIKE '%INT%' THEN 'INTEGER' "
+                + "WHEN UPPER(COLUMN_TYPE) LIKE '%CHAR%' OR UPPER(COLUMN_TYPE) LIKE '%TEXT%' "
+                + "THEN 'TEXT' "
+                + "WHEN UPPER(COLUMN_TYPE) LIKE '%BLOB%' THEN 'BLOB' "
+                + "WHEN UPPER(COLUMN_TYPE) LIKE '%REAL%' OR UPPER(COLUMN_TYPE) LIKE '%FLOA%' "
+                + "OR UPPER(COLUMN_TYPE) LIKE '%DOUB%' THEN 'REAL' "
+                + "ELSE UPPER(COLUMN_TYPE) END AS type, "
+                + "IF(IS_NULLABLE = 'NO', 1, 0) AS notnull, COLUMN_DEFAULT AS dflt_value, "
+                + "IF(COLUMN_KEY = 'PRI', 1, 0) AS pk "
+                + "FROM information_schema.COLUMNS "
+                + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? "
+                + "ORDER BY ORDINAL_POSITION";
+        return queryDirect(sub, new Object[] { table });
     }
 
     private static Cursor cursorPragmaForeignKeyListEmpty() {
         return new MatrixCursor(
-                new String[] {"id", "seq", "table", "on_delete", "on_update", "from", "to"});
+                new String[] { "id", "seq", "table", "on_delete", "on_update", "from", "to" });
     }
 
     private Cursor queryDirect(String sql, Object[] bindArgs) {
@@ -569,8 +566,10 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
     }
 
     /**
-     * Room's {@code RoomOpenHelper} queries {@code sqlite_master}, which does not exist on
-     * MySQL/OceanBase. Map the two catalog probes it uses to {@code information_schema.tables}.
+     * Room's {@code RoomOpenHelper} queries {@code sqlite_master}, which does not
+     * exist on
+     * MySQL/OceanBase. Map the two catalog probes it uses to
+     * {@code information_schema.tables}.
      */
     private Cursor maybeRouteRoomSqliteMasterQuery(String sql) {
         if (sql == null) {
@@ -594,16 +593,14 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
     }
 
     private Cursor cursorRoomHasRoomMasterTable() {
-        SeekdbCompatStatement st =
-                (SeekdbCompatStatement)
-                        compileStatement(
-                                "SELECT COUNT(*) FROM information_schema.tables WHERE "
-                                        + "TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'room_master_table'");
+        SeekdbCompatStatement st = (SeekdbCompatStatement) compileStatement(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE "
+                        + "TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'room_master_table'");
         try {
             long n = st.simpleQueryForLong();
-            MatrixCursor c = new MatrixCursor(new String[] {"1"});
+            MatrixCursor c = new MatrixCursor(new String[] { "1" });
             if (n > 0L) {
-                c.addRow(new Object[] {1});
+                c.addRow(new Object[] { 1 });
             }
             return c;
         } finally {
@@ -612,16 +609,14 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
     }
 
     private Cursor cursorRoomSqliteMasterNonAndroidMetadataCount() {
-        SeekdbCompatStatement st =
-                (SeekdbCompatStatement)
-                        compileStatement(
-                                "SELECT COUNT(*) FROM information_schema.tables WHERE "
-                                        + "TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' "
-                                        + "AND TABLE_NAME <> 'android_metadata'");
+        SeekdbCompatStatement st = (SeekdbCompatStatement) compileStatement(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE "
+                        + "TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' "
+                        + "AND TABLE_NAME <> 'android_metadata'");
         try {
             long n = st.simpleQueryForLong();
-            MatrixCursor c = new MatrixCursor(new String[] {"count(*)"});
-            c.addRow(new Object[] {n});
+            MatrixCursor c = new MatrixCursor(new String[] { "count(*)" });
+            c.addRow(new Object[] { n });
             return c;
         } finally {
             st.close();

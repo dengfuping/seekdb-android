@@ -1,7 +1,9 @@
 package com.oceanbase.seekdb.android.compat;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -43,6 +45,21 @@ public final class SeekdbCompatSqlTest {
                         "insertOrAbort"
                     },
                     new Object[] {
+                        "INSERT INTO `todo_table` (`id`,`title`) VALUES (?,?)",
+                        "INSERT OR ABORT INTO `todo_table` (`id`,`title`) VALUES (nullif(?, 0),?)",
+                        "insertOrAbort_roomNullIfZero"
+                    },
+                    new Object[] {
+                        "UPDATE `todo_table` SET `id` = ? WHERE `id` = ?",
+                        "UPDATE OR ABORT `todo_table` SET `id` = ? WHERE `id` = ?",
+                        "updateOrAbort"
+                    },
+                    new Object[] {
+                        "UPDATE IGNORE t SET a = 1 WHERE b = ?",
+                        "UPDATE OR IGNORE t SET a = 1 WHERE b = ?",
+                        "updateOrIgnore"
+                    },
+                    new Object[] {
                         "INSERT INTO t(a) VALUES (?)",
                         "INSERT OR FAIL INTO t(a) VALUES (?)",
                         "insertOrFail"
@@ -54,12 +71,24 @@ public final class SeekdbCompatSqlTest {
                     },
                     new Object[] {
                         "CREATE TABLE IF NOT EXISTS room_table_modification_log ("
-                                + "table_id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                                + " invalidated INTEGER NOT NULL DEFAULT 0)",
+                                + "table_id BIGINT PRIMARY KEY AUTO_INCREMENT,"
+                                + " invalidated BIGINT NOT NULL DEFAULT 0)",
                         "CREATE TEMP TABLE room_table_modification_log ("
                                 + "table_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                                 + " invalidated INTEGER NOT NULL DEFAULT 0)",
                         "createTempRoomModificationLog_fullDdl"
+                    },
+                    new Object[] {
+                        "CREATE TABLE IF NOT EXISTS `todo_table` (`id` BIGINT PRIMARY KEY AUTO_INCREMENT "
+                                + "NOT NULL, `title` TEXT)",
+                        "CREATE TABLE IF NOT EXISTS `todo_table` (`id` INTEGER PRIMARY KEY AUTOINCREMENT "
+                                + "NOT NULL, `title` TEXT)",
+                        "roomStylePrimaryKey_autoincrement"
+                    },
+                    new Object[] {
+                        "CREATE TABLE IF NOT EXISTS t (`createdAt` BIGINT NOT NULL, `n` BIGINT)",
+                        "CREATE TABLE IF NOT EXISTS t (`createdAt` INTEGER NOT NULL, `n` INTEGER)",
+                        "createTable_integerBecomesBigint"
                     },
                     new Object[] {
                         "CREATE TABLE IF NOT EXISTS room_table_modification_log (id INT)",
@@ -109,11 +138,40 @@ public final class SeekdbCompatSqlTest {
         }
     }
 
+    public static final class DiagnosticsTest {
+
+        @Test
+        public void formatPrepareFailure_includesPhaseSqlAndCode() {
+            String d =
+                    SeekdbCompatDiagnostics.formatPrepareFailure(
+                            "INSERT INTO `t` (`id`) VALUES (?)", -3);
+            assertTrue(d.contains("stmt_prepare"));
+            assertTrue(d.contains("lastErrCode=-3"));
+            assertTrue(d.contains("INSERT INTO"));
+        }
+    }
+
     public static final class NormalizeEdgeCasesTest {
 
         @Test
         public void null_returnsNull() {
             assertNull(SeekdbCompatSql.normalize(null));
+        }
+
+        @Test
+        public void roomInsertLeadingIdColumn_detection() {
+            assertTrue(
+                    SeekdbCompatSql.isRoomInsertLeadingBacktickIdColumn(
+                            "INSERT INTO `todo_table` (`id`,`title`) VALUES (?,?)"));
+            assertTrue(
+                    SeekdbCompatSql.isRoomInsertLeadingBacktickIdColumn(
+                            "INSERT IGNORE INTO t (`id`,a) VALUES (?,?)"));
+            assertFalse(
+                    SeekdbCompatSql.isRoomInsertLeadingBacktickIdColumn(
+                            "INSERT INTO `todo_table` (`title`,`id`) VALUES (?,?)"));
+            assertFalse(
+                    SeekdbCompatSql.isRoomInsertLeadingBacktickIdColumn(
+                            "UPDATE `todo_table` SET `id`=?"));
         }
     }
 }

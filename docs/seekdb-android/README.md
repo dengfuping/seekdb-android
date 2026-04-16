@@ -2,6 +2,7 @@
 
 - `seekdb-android-design.md`: end-to-end architecture and phase plan.
 - `api-compat-layer.md`: SQLite/Room compatibility layer design.
+- `room-sqlite-compat.md`: Room / SupportSQLite adaptation points (SQL rewrites, PRAGMA/sqlite_master routing, transactions, invalidation).
 - `api-native-layer.md`: SeekDB native layer design.
 - `compat-contract-matrix.md`: compatibility levels and verification contract.
 - `room-p0-scope.md`: Room P0 scope and done definition.

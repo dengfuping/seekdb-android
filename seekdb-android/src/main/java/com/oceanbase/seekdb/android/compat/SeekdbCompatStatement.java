@@ -17,10 +17,16 @@ import java.util.Locale;
 import java.util.Map;
 
 final class SeekdbCompatStatement implements SupportSQLiteStatement {
-    /** OceanBase {@code OB_EAGAIN} — user message is "Try again"; safe to retry execute after stmt reset. */
+    /**
+     * OceanBase {@code OB_EAGAIN} — user message is "Try again"; safe to retry
+     * execute after stmt reset.
+     */
     private static final int OB_EAGAIN = -4023;
 
-    /** Bootstrap DDL can hit many transient {@link #OB_EAGAIN}s; keep bounded but sufficient for embed. */
+    /**
+     * Bootstrap DDL can hit many transient {@link #OB_EAGAIN}s; keep bounded but
+     * sufficient for embed.
+     */
     private static final int EAGAIN_STMT_EXECUTE_MAX_ATTEMPTS = 128;
 
     private static final byte TYPE_NULL = 0;
@@ -31,8 +37,16 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
 
     private final long connectionPtr;
     private final String sql;
-    /** Same object as {@link com.oceanbase.seekdb.android.nativeapi.SeekdbConnection#nativeMutex()}. */
+    /**
+     * Same object as
+     * {@link com.oceanbase.seekdb.android.nativeapi.SeekdbConnection#nativeMutex()}.
+     */
     private final Object nativeMutex;
+    /**
+     * Room insert: first column {@code id}, bind {@code 0} → native NULL for
+     * {@code AUTO_INCREMENT}.
+     */
+    private final boolean bindFirstLongZeroAsNullForRoomInsert;
     private final Map<Integer, Object> values = new HashMap<>();
     private final Map<Integer, Byte> valueTypes = new HashMap<>();
 
@@ -40,11 +54,14 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
         this.connectionPtr = connectionPtr;
         this.sql = sql;
         this.nativeMutex = nativeMutex;
+        this.bindFirstLongZeroAsNullForRoomInsert = SeekdbCompatSql.isRoomInsertLeadingBacktickIdColumn(sql);
     }
 
     /**
-     * DDL may still expose non-null result metadata with {@code columnCount > 0}; pulling rows then
-     * hits native EOF / corrupt cursor state (see comment below). Skip row fetch for plain DDL.
+     * DDL may still expose non-null result metadata with {@code columnCount > 0};
+     * pulling rows then
+     * hits native EOF / corrupt cursor state (see comment below). Skip row fetch
+     * for plain DDL.
      */
     private void checkStmtExecuteRc(long connectionPtr, long stmt) {
         int execRc = SeekdbNativeBridge.nativeStmtLastExecuteRc(stmt);
@@ -53,14 +70,23 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
         }
         int last = SeekdbNativeBridge.nativeLastErrorCode();
         int rc = last != SeekdbSqliteErrorMapper.SEEKDB_SUCCESS ? last : execRc;
-        throw SeekdbSqliteErrorMapper.fromRc(rc, "seekdb_stmt_execute failed", connectionPtr);
+        int obErr = SeekdbNativeBridge.nativeErrno(connectionPtr);
+        String errMsg = SeekdbNativeBridge.nativeLastErrorMessage();
+        String head = (errMsg != null && !errMsg.isEmpty()) ? errMsg : "seekdb_stmt_execute failed";
+        String detail = SeekdbCompatDiagnostics.formatStmtExecuteFailure(
+                connectionPtr, sql, execRc, last, rc, obErr);
+        String full = head + detail;
+        throw SeekdbSqliteErrorMapper.fromRc(rc, full, optionalSqlState(connectionPtr));
     }
 
     /**
-     * Runs {@link SeekdbNativeBridge#nativeStmtExecute(long)} with a small bounded retry when the
-     * engine reports {@link #OB_EAGAIN} (compat: "Try again"), which can occur under transient
+     * Runs {@link SeekdbNativeBridge#nativeStmtExecute(long)} with a small bounded
+     * retry when the
+     * engine reports {@link #OB_EAGAIN} (compat: "Try again"), which can occur
+     * under transient
      * tablet/MDS contention on Android embed. Retries are immediate re-executes (no
-     * {@link SeekdbNativeBridge#nativeStmtReset(long)}); reset+rebind was observed to destabilize
+     * {@link SeekdbNativeBridge#nativeStmtReset(long)}); reset+rebind was observed
+     * to destabilize
      * some embed paths.
      */
     private long executeStmtWithEagainRetry(long stmt) {
@@ -79,15 +105,20 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
             int obErr = SeekdbNativeBridge.nativeErrno(connectionPtr);
             String errMsg = SeekdbNativeBridge.nativeLastErrorMessage();
             final boolean lastAttempt = attempt == EAGAIN_STMT_EXECUTE_MAX_ATTEMPTS - 1;
-            // Embed may surface OB_EAGAIN (-4023) on stmt return / last code while connection errno lags.
-            final boolean tryAgainTransient =
-                    obErr == OB_EAGAIN
-                            || execRc == OB_EAGAIN
-                            || last == OB_EAGAIN
-                            || (errMsg != null
-                                    && errMsg.toUpperCase(Locale.ROOT).contains("TRY AGAIN"));
+            // Embed may surface OB_EAGAIN (-4023) on stmt return / last code while
+            // connection errno lags.
+            final boolean tryAgainTransient = obErr == OB_EAGAIN
+                    || execRc == OB_EAGAIN
+                    || last == OB_EAGAIN
+                    || (errMsg != null
+                            && errMsg.toUpperCase(Locale.ROOT).contains("TRY AGAIN"));
             if (!tryAgainTransient || lastAttempt) {
-                throw SeekdbSqliteErrorMapper.fromRc(rc, "seekdb_stmt_execute failed", connectionPtr);
+                String head = (errMsg != null && !errMsg.isEmpty()) ? errMsg : "seekdb_stmt_execute failed";
+                String detail = SeekdbCompatDiagnostics.formatStmtExecuteFailure(
+                        connectionPtr, sql, execRc, last, rc, obErr);
+                String full = head + detail;
+                throw SeekdbSqliteErrorMapper.fromRc(
+                        rc, full, optionalSqlState(connectionPtr));
             }
         }
         throw new IllegalStateException("seekdb_stmt_execute retry loop fell through");
@@ -151,7 +182,10 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
         return parseIntegralResult(outcome.firstValue);
     }
 
-    /** OceanBase may return numeric cells as {@code "5.0"}; Room COUNT(*) paths need a whole number. */
+    /**
+     * OceanBase may return numeric cells as {@code "5.0"}; Room COUNT(*) paths need
+     * a whole number.
+     */
     private static long parseIntegralResult(String value) {
         String t = value.trim();
         try {
@@ -176,55 +210,53 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
 
     Cursor executeQueryCursor(CancellationSignal cancellationSignal) {
         synchronized (nativeMutex) {
-        long stmt = SeekdbNativeBridge.nativeStmtPrepare(connectionPtr, sql);
-        if (stmt == 0L) {
-            throw SeekdbSqliteErrorMapper.fromRc(
-                    SeekdbNativeBridge.nativeLastErrorCode(),
-                    "seekdb_stmt_prepare failed",
-                    connectionPtr);
-        }
-        boolean cursorOwnsStmt = false;
-        try {
-            bindAllParameters(stmt);
-            long result = executeStmtWithEagainRetry(stmt);
-            checkStmtExecuteRc(connectionPtr, stmt);
-            if (result == 0L) {
-                return new MatrixCursor(new String[0]);
+            long stmt = SeekdbNativeBridge.nativeStmtPrepare(connectionPtr, sql);
+            if (stmt == 0L) {
+                throwStmtPrepareFailed();
             }
-            String[] columns = readColumnNames(result);
-            if (columns.length == 0) {
-                return new MatrixCursor(new String[0]);
-            }
-            if (SeekdbStreamingPolicy.useStreamingQueryCursors()) {
-                cursorOwnsStmt = true;
-                return new SeekdbWindowedCursor(stmt, result, columns, cancellationSignal);
-            }
-            Object[][] rows =
-                    cancellationSignal == null
-                            ? SeekdbNativeBridge.nativeResultFetchAllTyped(result)
-                            : SeekdbNativeBridge.nativeResultFetchAllTyped(result, cancellationSignal);
-            if (rows == null) {
-                int rc = SeekdbNativeBridge.nativeLastErrorCode();
-                if (rc != SeekdbSqliteErrorMapper.SEEKDB_SUCCESS) {
-                    throw SeekdbSqliteErrorMapper.fromRc(
-                            rc, "seekdb result fetch failed", connectionPtr);
+            boolean cursorOwnsStmt = false;
+            try {
+                bindAllParameters(stmt);
+                long result = executeStmtWithEagainRetry(stmt);
+                checkStmtExecuteRc(connectionPtr, stmt);
+                if (result == 0L) {
+                    return new MatrixCursor(new String[0]);
                 }
-                throw new SQLiteException("nativeResultFetchAllTyped returned null");
-            }
-            // Result is owned by the native statement (stmt_data->result_set); seekdb_result_free()
-            // would delete it and leave a dangling pointer for ~SeekdbStmtData (double-free).
-            MatrixCursor cursor = new MatrixCursor(columns);
-            if (rows != null) {
-                for (Object[] row : rows) {
-                    cursor.addRow(row);
+                String[] columns = readColumnNames(result);
+                if (columns.length == 0) {
+                    return new MatrixCursor(new String[0]);
+                }
+                if (SeekdbStreamingPolicy.useStreamingQueryCursors()) {
+                    cursorOwnsStmt = true;
+                    return new SeekdbWindowedCursor(stmt, result, columns, cancellationSignal);
+                }
+                Object[][] rows = cancellationSignal == null
+                        ? SeekdbNativeBridge.nativeResultFetchAllTyped(result)
+                        : SeekdbNativeBridge.nativeResultFetchAllTyped(result, cancellationSignal);
+                if (rows == null) {
+                    int rc = SeekdbNativeBridge.nativeLastErrorCode();
+                    if (rc != SeekdbSqliteErrorMapper.SEEKDB_SUCCESS) {
+                        throw SeekdbSqliteErrorMapper.fromRc(
+                                rc, "seekdb result fetch failed", connectionPtr);
+                    }
+                    throw new SQLiteException("nativeResultFetchAllTyped returned null");
+                }
+                // Result is owned by the native statement (stmt_data->result_set);
+                // seekdb_result_free()
+                // would delete it and leave a dangling pointer for ~SeekdbStmtData
+                // (double-free).
+                MatrixCursor cursor = new MatrixCursor(columns);
+                if (rows != null) {
+                    for (Object[] row : rows) {
+                        cursor.addRow(row);
+                    }
+                }
+                return cursor;
+            } finally {
+                if (!cursorOwnsStmt) {
+                    SeekdbNativeBridge.nativeStmtClose(stmt);
                 }
             }
-            return cursor;
-        } finally {
-            if (!cursorOwnsStmt) {
-                SeekdbNativeBridge.nativeStmtClose(stmt);
-            }
-        }
         }
     }
 
@@ -239,6 +271,11 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
     @Override
     public void bindLong(int index, long value) {
         synchronized (nativeMutex) {
+            if (bindFirstLongZeroAsNullForRoomInsert && index == 1 && value == 0L) {
+                valueTypes.put(index, TYPE_NULL);
+                values.remove(index);
+                return;
+            }
             valueTypes.put(index, TYPE_LONG);
             values.put(index, value);
         }
@@ -289,59 +326,56 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
 
     private ExecOutcome executeInternal(CancellationSignal cancellationSignal) {
         synchronized (nativeMutex) {
-        long stmt = SeekdbNativeBridge.nativeStmtPrepare(connectionPtr, sql);
-        if (stmt == 0L) {
-            throw SeekdbSqliteErrorMapper.fromRc(
-                    SeekdbNativeBridge.nativeLastErrorCode(),
-                    "seekdb_stmt_prepare failed",
-                    connectionPtr);
-        }
-        ExecOutcome outcome = new ExecOutcome();
-        try {
-            bindAllParameters(stmt);
-            long result = executeStmtWithEagainRetry(stmt);
-            checkStmtExecuteRc(connectionPtr, stmt);
-            outcome.affectedRows = SeekdbNativeBridge.nativeStmtAffectedRows(stmt);
-            outcome.insertId = SeekdbNativeBridge.nativeStmtInsertId(stmt);
-            if (result != 0L) {
-                int columnCount = SeekdbNativeBridge.nativeResultColumnCount(result);
-                final boolean ddl = isDdlSql(sql);
-                if (columnCount > 0 && !ddl) {
-                    outcome.columns = new String[columnCount];
-                    for (int i = 0; i < columnCount; i++) {
-                        String name = SeekdbNativeBridge.nativeResultColumnName(result, i);
-                        outcome.columns[i] = name == null ? ("col_" + i) : name;
-                    }
-                    Object[][] rows =
-                            cancellationSignal == null
-                                    ? SeekdbNativeBridge.nativeResultFetchAllTyped(result)
-                                    : SeekdbNativeBridge.nativeResultFetchAllTyped(
-                                            result, cancellationSignal);
-                    if (rows == null) {
-                        int rc = SeekdbNativeBridge.nativeLastErrorCode();
-                        if (rc != SeekdbSqliteErrorMapper.SEEKDB_SUCCESS) {
-                            throw SeekdbSqliteErrorMapper.fromRc(
-                                    rc, "seekdb result fetch failed", connectionPtr);
-                        }
-                        throw new SQLiteException("nativeResultFetchAllTyped returned null");
-                    }
-                    outcome.rows = rows;
-                    if (rows.length > 0 && rows[0] != null && rows[0].length > 0) {
-                        outcome.firstValue = rows[0][0] == null ? null : String.valueOf(rows[0][0]);
-                    }
-                } else {
-                    // DDL / OK packets can expose a non-null result with 0 columns; fetching rows
-                    // then loops native EOF incorrectly and can hang or kill the process.
-                    // Engine may also report columnCount > 0 for DDL metadata; never pull rows for DDL.
-                    outcome.columns = new String[0];
-                    outcome.rows = null;
-                }
-                // Do not nativeResultFree(result): same ownership as executeQueryCursor().
+            long stmt = SeekdbNativeBridge.nativeStmtPrepare(connectionPtr, sql);
+            if (stmt == 0L) {
+                throwStmtPrepareFailed();
             }
-            return outcome;
-        } finally {
-            SeekdbNativeBridge.nativeStmtClose(stmt);
-        }
+            ExecOutcome outcome = new ExecOutcome();
+            try {
+                bindAllParameters(stmt);
+                long result = executeStmtWithEagainRetry(stmt);
+                checkStmtExecuteRc(connectionPtr, stmt);
+                outcome.affectedRows = SeekdbNativeBridge.nativeStmtAffectedRows(stmt);
+                outcome.insertId = SeekdbNativeBridge.nativeStmtInsertId(stmt);
+                if (result != 0L) {
+                    int columnCount = SeekdbNativeBridge.nativeResultColumnCount(result);
+                    final boolean ddl = isDdlSql(sql);
+                    if (columnCount > 0 && !ddl) {
+                        outcome.columns = new String[columnCount];
+                        for (int i = 0; i < columnCount; i++) {
+                            String name = SeekdbNativeBridge.nativeResultColumnName(result, i);
+                            outcome.columns[i] = name == null ? ("col_" + i) : name;
+                        }
+                        Object[][] rows = cancellationSignal == null
+                                ? SeekdbNativeBridge.nativeResultFetchAllTyped(result)
+                                : SeekdbNativeBridge.nativeResultFetchAllTyped(
+                                        result, cancellationSignal);
+                        if (rows == null) {
+                            int rc = SeekdbNativeBridge.nativeLastErrorCode();
+                            if (rc != SeekdbSqliteErrorMapper.SEEKDB_SUCCESS) {
+                                throw SeekdbSqliteErrorMapper.fromRc(
+                                        rc, "seekdb result fetch failed", connectionPtr);
+                            }
+                            throw new SQLiteException("nativeResultFetchAllTyped returned null");
+                        }
+                        outcome.rows = rows;
+                        if (rows.length > 0 && rows[0] != null && rows[0].length > 0) {
+                            outcome.firstValue = rows[0][0] == null ? null : String.valueOf(rows[0][0]);
+                        }
+                    } else {
+                        // DDL / OK packets can expose a non-null result with 0 columns; fetching rows
+                        // then loops native EOF incorrectly and can hang or kill the process.
+                        // Engine may also report columnCount > 0 for DDL metadata; never pull rows for
+                        // DDL.
+                        outcome.columns = new String[0];
+                        outcome.rows = null;
+                    }
+                    // Do not nativeResultFree(result): same ownership as executeQueryCursor().
+                }
+                return outcome;
+            } finally {
+                SeekdbNativeBridge.nativeStmtClose(stmt);
+            }
         }
     }
 
@@ -366,8 +400,37 @@ final class SeekdbCompatStatement implements SupportSQLiteStatement {
                 rc = -1;
             }
             if (rc != 0) {
-                throw SeekdbSqliteErrorMapper.fromRc(rc, "seekdb_stmt_bind_param failed", connectionPtr);
+                String nmsg = SeekdbNativeBridge.nativeLastErrorMessage();
+                String head = (nmsg != null && !nmsg.isEmpty())
+                        ? nmsg
+                        : "seekdb_stmt_bind_param failed";
+                String full = head + SeekdbCompatDiagnostics.formatBindFailure(sql, key, rc);
+                throw SeekdbSqliteErrorMapper.fromRc(
+                        rc, full, optionalSqlState(connectionPtr));
             }
+        }
+    }
+
+    private void throwStmtPrepareFailed() {
+        int prc = SeekdbNativeBridge.nativeLastErrorCode();
+        String nmsg = SeekdbNativeBridge.nativeLastErrorMessage();
+        String head = (nmsg != null && !nmsg.isEmpty()) ? nmsg : "seekdb_stmt_prepare failed";
+        String full = head + SeekdbCompatDiagnostics.formatPrepareFailure(sql, prc);
+        throw SeekdbSqliteErrorMapper.fromRc(prc, full, optionalSqlState(connectionPtr));
+    }
+
+    private static String optionalSqlState(long connectionPtr) {
+        if (connectionPtr == 0L) {
+            return null;
+        }
+        try {
+            String s = SeekdbNativeBridge.nativeLastSqlState(connectionPtr);
+            if (s == null || s.isEmpty()) {
+                return null;
+            }
+            return s;
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 

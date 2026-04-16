@@ -1,5 +1,7 @@
 # sqlite-android parity matrix (Java surface)
 
+Room-specific adaptation details (SeekDB embed rewrites, catalog routing): [`room-sqlite-compat.md`](room-sqlite-compat.md).
+
 Reference: [requery/sqlite-android](https://github.com/requery/sqlite-android) (`io.requery.android.database.*`).
 
 Legend: **Pass** (behaviour covered or delegated), **Degraded** (subset / different semantics), **N/A** (not applicable or engine limitation), **Planned** (on roadmap).
