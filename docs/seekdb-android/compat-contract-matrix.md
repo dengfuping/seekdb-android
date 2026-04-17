@@ -26,6 +26,7 @@
   - Contract: only the **outermost** `endTransaction` maps to native commit/rollback; inner pairs increment/decrement depth without a second native `BEGIN` (Room / `InvalidationTracker` can nest around app transactions). Not SQLite savepoints.
 - Busy/lock timing parity: DegradedCompatible
   - Contract: expose stable error behavior, timing details may differ.
+  - Optional coordination: `SeekdbRuntime.globalExclusiveLock()` / `SeekdbSerializedSession` bracket work when a single native connection must not interleave with other threads (not AOSP file locking).
 - `isDbLockedByCurrentThread`: DegradedCompatible
   - Contract: approximated as `inTransaction()`; not a file lock probe.
 - `getMaximumSize` / `setMaximumSize`: NotSupported (explicit)

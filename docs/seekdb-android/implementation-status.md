@@ -80,9 +80,10 @@
 - Session manager baseline added:
   - `SeekdbSessionManager` in `com.oceanbase.seekdb.android.runtime` for thread-bound shared connection reuse
 - Full SQLite replacement track (initial):
-  - `docs/seekdb-android/abi-parity-checklist.md`, `sqlite-android-parity-matrix.md`, `engine-features-matrix.md`, `seekdb-android/NOTICE`
-  - JNI ABI version **2**; optional `seekdb_stmt_reset` / `seekdb_stmt_clear_bindings`; `nativeResultReadNextRowTyped` for streaming rows
-  - `SeekdbResultScanner`, `SeekdbConnectionPool`, `SeekdbRuntime`, `SeekdbCursorWindowUtil` / `fillChunk`, public `SeekdbSQLite` facade
+  - `docs/seekdb-android/abi-parity-checklist.md`, `sqlite-android-parity-matrix.md`, `engine-features-matrix.md`, `engine-milestones-jni-requirements.md`, `seekdb-android/NOTICE`
+  - JNI ABI version **1** (see `SeekdbNativeBridge.nativeAbiVersion()` / `abi-parity-checklist.md`); optional `seekdb_stmt_reset` / `seekdb_stmt_clear_bindings`; `nativeResultReadNextRowTyped` for streaming rows
+  - `SeekdbResultScanner`, `SeekdbConnectionPool`, `SeekdbSerializedSession`, `SeekdbRuntime` (`globalExclusiveLock`), `SeekdbCursorWindowUtil` / `fillChunk`, cursor-driver stubs (`SeekdbSQLiteCursorDriver`, `SeekdbDefaultCursorDriver`), `SeekdbFrameworkOpenHelper`, public `SeekdbSQLite` facade (`frameworkOpenHelperFactory`, `createFrameworkOpenHelper`)
+  - `seekdb-android-inspection`: fork of sqlite-android-inspection (`androidx.sqlite.inspection`) wired to [SeekdbCompatDatabase](../../seekdb-android/src/main/java/com/oceanbase/seekdb/android/compat/SeekdbCompatDatabase.java); see [inspector-setup.md](inspector-setup.md)
   - Optional windowed query `Cursor`: `SeekdbWindowedCursor` (`AbstractWindowedCursor`) + `SeekdbStreamingPolicy` / `SeekdbSQLite.setStreamingQueryCursorsEnabled` (default off); integrates with `SeekdbCompatStatement.executeQueryCursor`
   - `com.vanniktech.maven.publish` for release coordinates (replaces manual `afterEvaluate` `maven-publish` block)
 - Performance baseline smoke test added:

@@ -12,6 +12,8 @@
 
 ```bash
 ./gradlew :seekdb-android:assembleDebug
+# Optional: Database Inspector placeholder AAR
+./gradlew :seekdb-android-inspection:assembleDebug
 ```
 
 ## Unit Tests
