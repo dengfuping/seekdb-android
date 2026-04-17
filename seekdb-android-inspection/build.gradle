@@ -1,0 +1,50 @@
+plugins {
+    id "com.android.library"
+    id "com.google.protobuf" version "0.9.4"
+}
+
+android {
+    namespace "androidx.sqlite.inspection"
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 26
+        consumerProguardFiles "consumer-rules.pro"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:3.25.3"
+    }
+    generateProtoTasks {
+        all().each { task ->
+            task.builtins {
+                java {
+                    option "lite"
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    // Database Inspector protocol (debug only in apps — see README / inspector-setup.md)
+    def inspectionVersion = findProperty("androidx.inspection.version") ?: "1.0.0-SNAPSHOT"
+    debugApi("androidx.inspection:inspection:${inspectionVersion}")
+    releaseCompileOnly("androidx.inspection:inspection:${inspectionVersion}")
+
+    compileOnly("androidx.annotation:annotation:1.9.1")
+    api("org.jspecify:jspecify:1.0.0")
+    api("com.google.protobuf:protobuf-javalite:3.25.3")
+    api(project(":seekdb-android"))
+}

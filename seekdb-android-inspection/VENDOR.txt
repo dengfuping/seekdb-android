@@ -1,0 +1,14 @@
+Fork of sqlite-android-inspection (AOSP `androidx.sqlite.inspection` protocol) with
+`io.requery.android.database.sqlite.*` replaced by `com.oceanbase.seekdb.android.compat.SeekdbCompatDatabase`
+/ `SeekdbCompatStatement`, and SeekDB-specific query/invalidation adjustments.
+
+Runtime `androidx.inspection.*` / tooling comes from Maven artifact `androidx.inspection:inspection`
+(not vendored). Snapshot repository and build id: root `gradle.properties`
+(`androidx.inspection.version`, `androidx.inspection.snapshot.buildId`); `settings.gradle` adds
+`https://androidx.dev/snapshots/builds/<BUILD_ID>/artifacts/repository`.
+
+`debugApi(inspection)`: available to debug consumers. `releaseCompileOnly`: release AAR does not bundle JVMTI.
+
+Apps: `debugImplementation(project(":seekdb-android-inspection"))` (or published coordinates).
+If the app resolves this module from Maven, add the same `androidx.dev` snapshot repo so
+`androidx.inspection:inspection` resolves.

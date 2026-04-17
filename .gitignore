@@ -7,6 +7,7 @@
 /.idea/libraries
 .DS_Store
 /build
+seekdb-android-inspection/build/
 /captures
 
 # Prebuilt JNI libs (build or copy locally; do not commit binaries)

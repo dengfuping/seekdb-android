@@ -10,9 +10,23 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // androidx.inspection (Database Inspector) is not on Maven Central; use AndroidX snapshot repo.
+        def props = new Properties()
+        def gp = file("${rootDir}/gradle.properties")
+        if (gp.exists()) {
+            gp.withInputStream { props.load(it) }
+        }
+        def buildId = props.getProperty("androidx.inspection.snapshot.buildId", "15127136")
+        maven {
+            url = uri("https://androidx.dev/snapshots/builds/${buildId}/artifacts/repository")
+            content {
+                includeGroup("androidx.inspection")
+            }
+        }
     }
 }
 
 rootProject.name = "seekdb-android"
 
 include(":seekdb-android")
+include(":seekdb-android-inspection")
