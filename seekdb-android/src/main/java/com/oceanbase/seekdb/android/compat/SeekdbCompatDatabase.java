@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.MatrixCursor;
+import android.database.sqlite.SQLiteClosable;
 import android.database.sqlite.SQLiteTransactionListener;
 import android.os.OperationCanceledException;
 import android.os.CancellationSignal;
@@ -22,7 +23,12 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
+/**
+ * SeekDB-backed {@link SupportSQLiteDatabase}; extends {@link SQLiteClosable}
+ * so Database Inspector
+ * (ART hooks on reference lifecycle) matches Android SQLite semantics.
+ */
+public final class SeekdbCompatDatabase extends SQLiteClosable implements SupportSQLiteDatabase {
     /**
      * Android SQLite uses {@code INSERT OR IGNORE INTO ...} /
      * {@code UPDATE OR IGNORE ...}.
@@ -32,7 +38,11 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
      * concatenate into
      * {@code INSERTINTO} / {@code UPDATEt}).
      */
-    private final String path;
+    /**
+     * Same as {@link android.database.sqlite.SQLiteDatabase#getPath}: absolute path
+     * of the DB file.
+     */
+    private String path;
     private boolean open = true;
     /**
      * Nested levels (Room invalidation may begin/end before the app's transaction).
@@ -48,8 +58,20 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
     private final SeekdbSessionManager sessionManager = new SeekdbSessionManager();
     private SQLiteTransactionListener activeTransactionListener;
 
-    SeekdbCompatDatabase(String path) {
-        this.path = path;
+    SeekdbCompatDatabase(String logicalName) {
+        this.path = logicalName;
+    }
+
+    /**
+     * Sets {@link #getPath()} to the Android database file path (for Room /
+     * Database Inspector).
+     * Called before {@link #setConnection} during open.
+     */
+    void bindAbsoluteDatabasePath(android.content.Context ctx, String dbFileName) {
+        if (dbFileName == null) {
+            dbFileName = "seekdb_android.db";
+        }
+        this.path = ctx.getDatabasePath(dbFileName).getAbsolutePath();
     }
 
     void attachHost(SeekdbOpenHelper helper) {
@@ -482,7 +504,8 @@ final class SeekdbCompatDatabase implements SupportSQLiteDatabase {
     }
 
     @Override
-    public void close() {
+    protected void onAllReferencesReleased() {
+        SeekdbInspectionBridge.unregisterOpenDatabase(this);
         if (connection != null) {
             connection.close();
             connection = null;

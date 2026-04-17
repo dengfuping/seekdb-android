@@ -31,7 +31,7 @@ public final class SeekdbConnectionPool {
             if (c == null || c.isClosed()) {
                 throw new IllegalStateException("No primary connection installed");
             }
-            return new PooledConnection(c);
+            return new PooledConnection(this, c);
         }
     }
 
@@ -42,15 +42,26 @@ public final class SeekdbConnectionPool {
         // Single-connection mode: no-op
     }
 
-    public static final class PooledConnection {
+    public static final class PooledConnection implements AutoCloseable {
+        private final SeekdbConnectionPool owner;
         private final SeekdbConnection connection;
+        private boolean released;
 
-        PooledConnection(SeekdbConnection connection) {
+        PooledConnection(SeekdbConnectionPool owner, SeekdbConnection connection) {
+            this.owner = owner;
             this.connection = connection;
         }
 
         public SeekdbConnection connection() {
             return connection;
+        }
+
+        @Override
+        public void close() {
+            if (!released) {
+                released = true;
+                owner.release(this);
+            }
         }
     }
 }

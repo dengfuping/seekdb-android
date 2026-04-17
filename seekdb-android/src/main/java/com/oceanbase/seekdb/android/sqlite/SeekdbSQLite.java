@@ -1,9 +1,12 @@
 package com.oceanbase.seekdb.android.sqlite;
 
+import android.content.Context;
+import androidx.annotation.Nullable;
 import androidx.sqlite.db.SupportSQLiteOpenHelper;
 import com.oceanbase.seekdb.android.compat.SeekdbCompat;
 import com.oceanbase.seekdb.android.core.SeekdbNativeBridge;
 import com.oceanbase.seekdb.android.runtime.SeekdbStreamingPolicy;
+import com.oceanbase.seekdb.android.sqlite.framework.SeekdbFrameworkOpenHelper;
 
 /**
  * Public entry for Room / {@link androidx.sqlite.db.SupportSQLite} integration and JNI ABI introspection.
@@ -16,6 +19,23 @@ public final class SeekdbSQLite {
     /** Same as {@link SeekdbCompat#factory()}; use with {@code Room.databaseBuilder(...).openHelperFactory(...)}. */
     public static SupportSQLiteOpenHelper.Factory supportOpenHelperFactory() {
         return SeekdbCompat.factory();
+    }
+
+    /**
+     * Same factory as {@link #supportOpenHelperFactory()}; name reflects Phase 3 “framework-shaped” helper
+     * for apps migrating from {@code SQLiteOpenHelper}.
+     */
+    public static SupportSQLiteOpenHelper.Factory frameworkOpenHelperFactory() {
+        return SeekdbCompat.factory();
+    }
+
+    /**
+     * Builds a {@link SeekdbFrameworkOpenHelper} (SeekDB-backed {@link SupportSQLiteOpenHelper}) for apps
+     * that prefer a dedicated class over {@link SupportSQLiteOpenHelper.Factory} alone.
+     */
+    public static SeekdbFrameworkOpenHelper createFrameworkOpenHelper(
+            Context context, @Nullable String name, SupportSQLiteOpenHelper.Callback callback) {
+        return new SeekdbFrameworkOpenHelper(context, name, callback);
     }
 
     /** JNI bridge ABI version; increments when optional native symbols or semantics change. */

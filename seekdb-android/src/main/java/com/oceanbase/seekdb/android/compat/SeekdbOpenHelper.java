@@ -119,6 +119,7 @@ final class SeekdbOpenHelper implements SupportSQLiteOpenHelper {
             throw new IllegalStateException("SeekDB native library is not available");
         }
         String dbName = configuration.name == null ? "seekdb_android.db" : configuration.name;
+        database.bindAbsoluteDatabasePath(ctx, dbName);
         // Storage directory for embedded observer (aligned with historical Python embed: one root
         // per app databases dir). Per-file paths caused Room/OpenHelper DDL to diverge from runtime.
         String dbPath = configuration.context.getDatabasePath(dbName).getParent();
@@ -132,6 +133,7 @@ final class SeekdbOpenHelper implements SupportSQLiteOpenHelper {
         // (not the SQLite file name). Embedded build currently expects the default `test` schema.
         connection = SeekdbClient.connect("test", true);
         database.setConnection(connection);
+        SeekdbInspectionBridge.registerOpenDatabase(database);
         SeekdbRuntime.installGlobalPrimary(connection);
         if (writeAheadLoggingEnabled) {
             database.enableWriteAheadLogging();

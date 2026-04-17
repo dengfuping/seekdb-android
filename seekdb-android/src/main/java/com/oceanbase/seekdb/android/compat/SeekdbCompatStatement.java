@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-final class SeekdbCompatStatement implements SupportSQLiteStatement {
+public final class SeekdbCompatStatement implements SupportSQLiteStatement {
     /**
      * OceanBase {@code OB_EAGAIN} — user message is "Try again"; safe to retry
      * execute after stmt reset.

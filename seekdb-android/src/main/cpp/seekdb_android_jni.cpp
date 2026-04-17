@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -489,9 +491,26 @@ static jobjectArray read_typed_row_cells(
                         static_cast<jboolean>(v ? JNI_TRUE : JNI_FALSE));
             }
         } else if (cat == 2) {
-            double v = 0;
-            if (a.seekdb_row_get_double(row, static_cast<int32_t>(i), &v) == kSeekdbSuccess) {
-                cell = env->CallStaticObjectMethod(double_cls, double_value_of, static_cast<jdouble>(v));
+            // Metadata may label INTEGER/BIGINT as DOUBLE; prefer int64 so MatrixCursor uses
+            // FIELD_TYPE_INTEGER (matches SQLite Inspector). Avoids 1.0 vs 1 and E-notation millis.
+            int64_t iv = 0;
+            if (a.seekdb_row_get_int64 != nullptr
+                    && a.seekdb_row_get_int64(row, static_cast<int32_t>(i), &iv) == kSeekdbSuccess) {
+                cell = env->CallStaticObjectMethod(long_cls, long_value_of, static_cast<jlong>(iv));
+            } else {
+                double v = 0;
+                if (a.seekdb_row_get_double(row, static_cast<int32_t>(i), &v) == kSeekdbSuccess) {
+                    double intpart = 0;
+                    const double frac = std::modf(v, &intpart);
+                    if (frac == 0.0 && v >= static_cast<double>(INT64_MIN)
+                            && v <= static_cast<double>(INT64_MAX)) {
+                        cell = env->CallStaticObjectMethod(
+                                long_cls, long_value_of, static_cast<jlong>(static_cast<int64_t>(v)));
+                    } else {
+                        cell = env->CallStaticObjectMethod(
+                                double_cls, double_value_of, static_cast<jdouble>(v));
+                    }
+                }
             }
         } else if (cat == 1) {
             int64_t v = 0;
@@ -530,6 +549,67 @@ static jobjectArray read_typed_row_cells(
         }
     }
     return inner;
+}
+
+} // namespace
+
+namespace {
+
+std::mutex g_inspection_mutex;
+std::vector<jobject> g_inspection_open_dbs; // global refs to SeekdbCompatDatabase
+
+void inspection_register(JNIEnv* env, jobject db_local) {
+    if (db_local == nullptr) {
+        return;
+    }
+    jobject g = env->NewGlobalRef(db_local);
+    if (g == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_inspection_mutex);
+    for (jobject existing : g_inspection_open_dbs) {
+        if (env->IsSameObject(existing, g)) {
+            env->DeleteGlobalRef(g);
+            return;
+        }
+    }
+    g_inspection_open_dbs.push_back(g);
+}
+
+void inspection_unregister(JNIEnv* env, jobject db_local) {
+    if (db_local == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_inspection_mutex);
+    for (size_t i = 0; i < g_inspection_open_dbs.size(); ++i) {
+        if (env->IsSameObject(g_inspection_open_dbs[i], db_local)) {
+            env->DeleteGlobalRef(g_inspection_open_dbs[i]);
+            g_inspection_open_dbs.erase(g_inspection_open_dbs.begin() + static_cast<std::ptrdiff_t>(i));
+            return;
+        }
+    }
+}
+
+jobjectArray inspection_snapshot(JNIEnv* env) {
+    jclass object_class = env->FindClass("java/lang/Object");
+    if (object_class == nullptr) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(g_inspection_mutex);
+    const jsize n = static_cast<jsize>(g_inspection_open_dbs.size());
+    jobjectArray arr = env->NewObjectArray(n, object_class, nullptr);
+    env->DeleteLocalRef(object_class);
+    if (arr == nullptr) {
+        return nullptr;
+    }
+    for (jsize i = 0; i < n; ++i) {
+        jobject local = env->NewLocalRef(g_inspection_open_dbs[static_cast<size_t>(i)]);
+        if (local != nullptr) {
+            env->SetObjectArrayElement(arr, i, local);
+            env->DeleteLocalRef(local);
+        }
+    }
+    return arr;
 }
 
 } // namespace
@@ -1150,4 +1230,27 @@ Java_com_oceanbase_seekdb_android_core_SeekdbNativeBridge_nativeLastSqlState__J(
     }
     const char* st = a.seekdb_sqlstate_fn(reinterpret_cast<SeekdbHandle>(connection_ptr));
     return env->NewStringUTF(st == nullptr ? "" : st);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_oceanbase_seekdb_android_core_SeekdbNativeBridge_nativeInspectionRegisterOpenDatabase(
+        JNIEnv* env,
+        jclass,
+        jobject database) {
+    inspection_register(env, database);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_oceanbase_seekdb_android_core_SeekdbNativeBridge_nativeInspectionUnregisterOpenDatabase(
+        JNIEnv* env,
+        jclass,
+        jobject database) {
+    inspection_unregister(env, database);
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_oceanbase_seekdb_android_core_SeekdbNativeBridge_nativeInspectionSnapshotOpenDatabases(
+        JNIEnv* env,
+        jclass) {
+    return inspection_snapshot(env);
 }

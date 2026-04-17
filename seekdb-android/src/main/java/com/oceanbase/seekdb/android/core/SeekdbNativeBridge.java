@@ -105,4 +105,17 @@ public final class SeekdbNativeBridge {
      * callers should check {@link #nativeLastErrorCode()}.
      */
     public static native Object[] nativeResultReadNextRowTyped(long resultPtr);
+
+    /**
+     * Process-wide open {@link com.oceanbase.seekdb.android.compat.SeekdbCompatDatabase} handles for
+     * App Inspection (stored as JNI global refs so Database Inspector sees the same instances even
+     * when multiple ClassLoaders would duplicate Java static state, or when {@code findInstances} is
+     * empty on newer Android releases).
+     */
+    public static native void nativeInspectionRegisterOpenDatabase(Object database);
+
+    public static native void nativeInspectionUnregisterOpenDatabase(Object database);
+
+    /** Returns a new array of local references; may be empty, never {@code null}. */
+    public static native Object[] nativeInspectionSnapshotOpenDatabases();
 }
